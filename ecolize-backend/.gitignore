@@ -1,0 +1,20 @@
+# Variáveis de ambiente
+.env
+
+# Dependências
+node_modules/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Certificados
+# (CA público pode entrar no repo, mas se quiser ser conservador, descomente:)
+# certs/
