@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const db = require('../config/db');
+const { parseDataNascimento } = require('../utils/parseDataNascimento');
 
 // GET 
 async function getProfile(req, res) {
@@ -27,12 +28,17 @@ async function updateProfile(req, res) {
     return res.status(400).json({ message: 'O nome é obrigatório.' });
   }
 
+  const parsedBirth = parseDataNascimento(data_nascimento);
+  if (!parsedBirth.ok) {
+    return res.status(400).json({ message: parsedBirth.message });
+  }
+
   try {
     await db.query(
       `UPDATE USUARIO 
        SET NOME = ?, GENERO = ?, CIDADE = ?, ESTADO = ?, PAIS = ?, DATA_NASCIMENTO = ?
        WHERE ID = ?`,
-      [name, genero, cidade, estado, pais, data_nascimento, req.userId]
+      [name, genero, cidade, estado, pais, parsedBirth.value, req.userId]
     );
     return res.status(200).json({ message: 'Perfil atualizado com sucesso.' });
   } catch (err) {

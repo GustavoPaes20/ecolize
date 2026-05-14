@@ -1,13 +1,16 @@
+import { useEffect, useState } from 'react'
 import {
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native'
-import { SafeAreaView as SafeAreaContextView } from 'react-native-safe-area-context'
+import { SafeAreaView as SafeAreaContextView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 const backArrowImage = require('../../../assets/images/auth/backArrow.png')
 const bottomBlobImage = require('../../../assets/images/auth/bottomBlob.png')
@@ -28,11 +31,30 @@ export default function AuthLayout({
   feedbackMessage,
   feedbackTone = 'neutral',
 }) {
+  const insets = useSafeAreaInsets()
+  const [keyboardInset, setKeyboardInset] = useState(0)
+
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide'
+    const showSub = Keyboard.addListener(showEvt, (e) => {
+      setKeyboardInset(e.endCoordinates?.height ?? 0)
+    })
+    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardInset(0))
+    return () => {
+      showSub.remove()
+      hideSub.remove()
+    }
+  }, [])
+
+  const scrollBottomPad = 32 + Math.min(keyboardInset, 320)
+
   return (
     <SafeAreaContextView style={styles.safeArea}>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 12 : insets.top + 24}
       >
         <Image source={topBlobImage} style={styles.topBlob} resizeMode="contain" />
         <Image source={bottomBlobImage} style={styles.bottomBlob} resizeMode="contain" />
@@ -44,45 +66,52 @@ export default function AuthLayout({
           <Image source={backArrowImage} style={styles.backArrow} resizeMode="contain" />
         </Pressable>
 
-        <View
-          style={[styles.content, verticalOffset !== 0 && { transform: [{ translateY: verticalOffset }] }]}
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPad }]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          <View style={styles.header}>
-            <Text style={styles.title}>{title}</Text>
-            <Text style={styles.subtitle}>{subtitle}</Text>
-          </View>
+          <View
+            style={[styles.content, verticalOffset !== 0 && { transform: [{ translateY: verticalOffset }] }]}
+          >
+            <View style={styles.header}>
+              <Text style={styles.title}>{title}</Text>
+              <Text style={styles.subtitle}>{subtitle}</Text>
+            </View>
 
-          <View style={styles.form}>{children}</View>
+            <View style={styles.form}>{children}</View>
 
-          <View style={styles.actions}>
-            <Pressable
-              style={[styles.primaryButton, submitDisabled && styles.primaryButtonDisabled]}
-              onPress={onSubmit}
-              disabled={submitDisabled}
-            >
-              <Text style={styles.primaryButtonText}>{buttonText}</Text>
-            </Pressable>
-
-            {feedbackMessage ? (
-              <Text
-                style={[
-                  styles.feedbackText,
-                  feedbackTone === 'error' && styles.feedbackTextError,
-                  feedbackTone === 'success' && styles.feedbackTextSuccess,
-                ]}
+            <View style={styles.actions}>
+              <Pressable
+                style={[styles.primaryButton, submitDisabled && styles.primaryButtonDisabled]}
+                onPress={onSubmit}
+                disabled={submitDisabled}
               >
-                {feedbackMessage}
-              </Text>
-            ) : null}
-
-            <View style={styles.footerRow}>
-              <Text style={styles.footerText}>{footerText}</Text>
-              <Pressable onPress={onFooterPress}>
-                <Text style={styles.footerLink}>{footerLinkText}</Text>
+                <Text style={styles.primaryButtonText}>{buttonText}</Text>
               </Pressable>
+
+              {feedbackMessage ? (
+                <Text
+                  style={[
+                    styles.feedbackText,
+                    feedbackTone === 'error' && styles.feedbackTextError,
+                    feedbackTone === 'success' && styles.feedbackTextSuccess,
+                  ]}
+                >
+                  {feedbackMessage}
+                </Text>
+              ) : null}
+
+              <View style={styles.footerRow}>
+                <Text style={styles.footerText}>{footerText}</Text>
+                <Pressable onPress={onFooterPress}>
+                  <Text style={styles.footerLink}>{footerLinkText}</Text>
+                </Pressable>
+              </View>
             </View>
           </View>
-        </View>
+        </ScrollView>
 
         <View style={styles.homeIndicator} />
       </KeyboardAvoidingView>
@@ -99,6 +128,13 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#EEF4FA',
     overflow: 'hidden',
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: 32,
   },
   topBlob: {
     position: 'absolute',

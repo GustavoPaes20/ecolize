@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../config/db');
+const { parseDataNascimento } = require('../utils/parseDataNascimento');
 
 function generateToken(userId) {
   return jwt.sign(
@@ -14,8 +15,13 @@ function generateToken(userId) {
 async function register(req, res) {
   const { name, email, password, data_nascimento, genero, cidade, estado, pais } = req.body;
 
-  if (!name || !email || !password || !data_nascimento) {
+  if (!name || !email || !password || !data_nascimento || !genero || !cidade || !estado || !pais) {
     return res.status(400).json({ message: 'Preencha todos os campos obrigatórios.' });
+  }
+
+  const parsedBirth = parseDataNascimento(data_nascimento);
+  if (!parsedBirth.ok) {
+    return res.status(400).json({ message: parsedBirth.message });
   }
 
   try {
@@ -32,7 +38,7 @@ async function register(req, res) {
       `INSERT INTO USUARIO 
         (NOME, EMAIL, SENHA, DATA_CADASTRADA, DATA_NASCIMENTO, GENERO, CIDADE, ESTADO, PAIS) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [name, email, passwordHash, dataCadastrada, data_nascimento, genero, cidade, estado, pais]
+      [name, email, passwordHash, dataCadastrada, parsedBirth.value, genero, cidade, estado, pais]
     );
     const userId = result.insertId;
     const token = generateToken(userId);
@@ -45,7 +51,16 @@ async function register(req, res) {
 
   } catch (err) {
     console.error('Erro no registro:', err);
-    return res.status(500).json({ message: 'Erro interno do servidor.' });
+    let message = 'Erro interno do servidor.';
+    let status = 500;
+    if (err.code === 'ER_DUP_ENTRY') {
+      message = 'E-mail já cadastrado.';
+      status = 409;
+    } else if (err.code === 'ER_TRUNCATED_WRONG_VALUE' || err.sqlState === '22007') {
+      message = 'Data de nascimento inválida. Use DD-MM-AAAA ou AAAA-MM-DD.';
+      status = 400;
+    }
+    return res.status(status).json({ message });
   }
 }
 // POST

@@ -8,6 +8,9 @@ export default function AuthInput({
   value,
   onChangeText,
   secureTextEntry = false,
+  maxLength,
+  keyboardType,
+  autoCapitalize = 'sentences',
 }) {
   return (
     <ImageBackground
@@ -25,6 +28,10 @@ export default function AuthInput({
           style={styles.input}
           value={value}
           onChangeText={onChangeText}
+          maxLength={maxLength}
+          keyboardType={keyboardType}
+          autoCapitalize={autoCapitalize}
+          selectionColor="#1E293B"
         />
       </View>
     </ImageBackground>
@@ -52,7 +59,7 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    color: '#64748B',
+    color: '#1E293B',
     fontSize: 16,
     paddingVertical: 0,
   },

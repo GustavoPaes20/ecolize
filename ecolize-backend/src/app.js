@@ -13,6 +13,10 @@ const { startMqttSubscriber } = require('./services/mqttSubscriber');
 const app = express();
 app.use(express.json());
 
+const cors = require('cors');
+// ...
+app.use(cors());
+
 app.use('/auth', authRoutes);
 app.use('/users', userRoutes);
 app.use('/goals', goalsRoutes);

@@ -1,110 +1,111 @@
-import { delay } from '../utils/delay'
-import {
-  clearCurrentUserSession,
-  getCurrentUser,
-  mockStore,
-  setCurrentUserSession,
-} from '../mocks/mockStore'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { request } from './apiClient'
+
+const TOKEN_KEY = '@ecolize:token'
+const USER_KEY = '@ecolize:user'
 
 function normalizeName(fullName) {
   return fullName.trim().split(/\s+/)[0] || fullName.trim()
 }
 
-export async function getSession() {
-  await delay(150)
-
-  const user = getCurrentUser()
-
-  return user && mockStore.session
-    ? {
-        token: mockStore.session.token,
-        user,
-      }
-    : null
-}
-
-export async function login({ email, password }) {
-  await delay(350)
-
-  const user = Object.values(mockStore.users).find(
-    (item) => item.email.toLowerCase() === email.trim().toLowerCase()
-  )
-
-  if (!user || user.password !== password) {
-    throw new Error('E-mail ou senha inválidos.')
-  }
-
-  setCurrentUserSession(user.id)
-
+// Monta o objeto de usuário no formato que o app espera
+function buildUserFromBackend(backendUser) {
   return {
-    token: mockStore.session.token,
-    user: getCurrentUser(),
-  }
-}
-
-export async function register({ name, email, password }) {
-  await delay(350)
-
-  const alreadyExists = Object.values(mockStore.users).some(
-    (item) => item.email.toLowerCase() === email.trim().toLowerCase()
-  )
-
-  if (alreadyExists) {
-    throw new Error('Já existe uma conta com esse e-mail.')
-  }
-
-  const nextId = `user-${Object.keys(mockStore.users).length + 1}`
-
-  mockStore.users[nextId] = {
-    id: nextId,
-    fullName: name.trim(),
-    firstName: normalizeName(name),
-    email: email.trim(),
-    birthDate: '08/06/2004',
-    gender: 'Feminino',
-    countryState: 'Brasil, Amazonas',
+    id: backendUser.id,
+    fullName: backendUser.name,
+    firstName: normalizeName(backendUser.name),
+    email: backendUser.email,
+    birthDate: backendUser.data_nascimento || '',
+    gender: backendUser.genero || '',
+    countryState: [backendUser.pais, backendUser.estado].filter(Boolean).join(', '),
     badgeTitle: 'Guardião da natureza',
     stats: [
       { value: '0', label: 'DIAS' },
       { value: '#-', label: 'RANK' },
       { value: '0', label: 'TROFÉUS' },
     ],
-    password,
   }
+}
 
-  setCurrentUserSession(nextId)
+export async function getSession() {
+  const token = await AsyncStorage.getItem(TOKEN_KEY)
+  const userRaw = await AsyncStorage.getItem(USER_KEY)
+
+  if (!token || !userRaw) return null
 
   return {
-    token: mockStore.session.token,
-    user: getCurrentUser(),
+    token,
+    user: JSON.parse(userRaw),
   }
+}
+
+export async function login({ email, password }) {
+  const data = await request('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({
+      email: email.trim(),
+      password,
+    }),
+  })
+  // backend retorna: { token, user: { id, name, email } }
+
+  const user = buildUserFromBackend(data.user)
+
+  await AsyncStorage.setItem(TOKEN_KEY, data.token)
+  await AsyncStorage.setItem(USER_KEY, JSON.stringify(user))
+
+  return { token: data.token, user }
+}
+
+export async function register({ name, email, password, data_nascimento, genero, cidade, estado, pais }) {
+  const data = await request('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: name.trim(),
+      email: email.trim(),
+      password,
+      data_nascimento, // AAAA-MM-DD (convertido a partir de DD-MM-AAAA na tela de registro)
+      genero,
+      cidade,
+      estado,
+      pais,
+    }),
+  })
+
+  const user = buildUserFromBackend(data.user)
+
+  await AsyncStorage.setItem(TOKEN_KEY, data.token)
+  await AsyncStorage.setItem(USER_KEY, JSON.stringify(user))
+
+  return { token: data.token, user }
 }
 
 export async function logout() {
-  await delay(120)
-  clearCurrentUserSession()
+  await AsyncStorage.removeItem(TOKEN_KEY)
+  await AsyncStorage.removeItem(USER_KEY)
 }
 
 export async function updateEmail(email) {
-  await delay(250)
+  // Seu backend não tem rota específica pra trocar só o email;
+  // o PUT /users/profile aceita nome, cidade, etc. mas não email.
+  // Por ora, atualiza só localmente. Se quiser persistir, precisa criar rota no backend.
+  const userRaw = await AsyncStorage.getItem(USER_KEY)
+  if (!userRaw) throw new Error('Sessão inválida.')
 
-  const user = getCurrentUser()
-  if (!user) {
-    throw new Error('Sessão inválida.')
-  }
+  const user = JSON.parse(userRaw)
+  user.email = email.trim()
+  await AsyncStorage.setItem(USER_KEY, JSON.stringify(user))
 
-  mockStore.users[user.id].email = email.trim()
-
-  return getCurrentUser()
+  return user
 }
 
-export async function updatePassword() {
-  await delay(250)
-  const user = getCurrentUser()
-
-  if (!user) {
-    throw new Error('Sessão inválida.')
-  }
-
+export async function updatePassword({ currentPassword, newPassword }) {
+  await request('/users/change-password', {
+    method: 'PUT',
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  })
   return { success: true }
 }
