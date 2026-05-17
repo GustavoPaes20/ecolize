@@ -28,9 +28,12 @@ function ConsumptionCard({
   valueColor,
   progressColor,
   progressBackground,
+  progress,
   width,
   onPress,
 }) {
+  const progressWidth = `${Math.max(0, Math.min(progress ?? 0, 100))}%`
+
   return (
     <Pressable style={[styles.metricCard, { width }]} onPress={onPress}>
       <ElevatedCard style={styles.metricCardSurface}>
@@ -41,8 +44,13 @@ function ConsumptionCard({
         <Text style={[styles.metricValue, { color: valueColor }]}>{value}</Text>
 
         <View style={styles.metricProgressSlot}>
-          <View style={[styles.metricProgressTrack, { backgroundColor: progressBackground }]}>
-            <View style={[styles.metricProgressFill, { backgroundColor: progressColor }]} />
+          <View style={[styles.metricProgressTrack, { backgroundColor: progressBackground }]}> 
+            <View
+              style={[
+                styles.metricProgressFill,
+                { backgroundColor: progressColor, width: progressWidth },
+              ]}
+            />
           </View>
         </View>
       </ElevatedCard>
@@ -367,7 +375,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   metricProgressFill: {
-    width: '61%',
     height: '100%',
     borderRadius: 30,
   },

@@ -1,6 +1,4 @@
-import { Image, ImageBackground, StyleSheet, TextInput, View } from 'react-native'
-
-const inputBgImage = require('../../../assets/images/auth/inputBg.png')
+import { Image, Platform, StyleSheet, TextInput, View } from 'react-native'
 
 export default function AuthInput({
   iconSource,
@@ -13,12 +11,7 @@ export default function AuthInput({
   autoCapitalize = 'sentences',
 }) {
   return (
-    <ImageBackground
-      source={inputBgImage}
-      resizeMode="stretch"
-      style={styles.inputBackground}
-      imageStyle={styles.inputBackgroundImage}
-    >
+    <View style={styles.inputShell}>
       <View style={styles.inputContent}>
         <Image source={iconSource} style={styles.inputIcon} resizeMode="contain" />
         <TextInput
@@ -34,18 +27,30 @@ export default function AuthInput({
           selectionColor="#1E293B"
         />
       </View>
-    </ImageBackground>
+    </View>
   )
 }
 
 const styles = StyleSheet.create({
-  inputBackground: {
+  inputShell: {
     width: '100%',
     height: 59,
     justifyContent: 'center',
-  },
-  inputBackgroundImage: {
+    backgroundColor: '#FFFFFF',
     borderRadius: 30,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#CBD5E1',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0F172A',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.06,
+        shadowRadius: 2,
+      },
+      android: {
+        elevation: 1,
+      },
+    }),
   },
   inputContent: {
     flexDirection: 'row',
@@ -62,5 +67,6 @@ const styles = StyleSheet.create({
     color: '#1E293B',
     fontSize: 16,
     paddingVertical: 0,
+    backgroundColor: 'transparent',
   },
 })

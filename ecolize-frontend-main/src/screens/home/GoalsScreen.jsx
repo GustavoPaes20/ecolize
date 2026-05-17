@@ -1,12 +1,18 @@
-import { useMemo, useState } from 'react'
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
+import { useEffect, useMemo, useState } from 'react'
+import { Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 
 import ScreenState from '../../components/common/ScreenState'
 import ElevatedCard from '../../components/home/ElevatedCard'
 import HomeFeatureScreen from '../../components/home/HomeFeatureScreen'
 import ScreenHero from '../../components/home/ScreenHero'
 import useAsyncData from '../../hooks/useAsyncData'
-import { getGoals, GOAL_CONFIG, updateGoal } from '../../services/goalsService'
+import {
+  getGoals,
+  GOAL_CONFIG,
+  updateGoal,
+  setGoalValue,
+  calculateGoalCost,
+} from '../../services/goalsService'
 
 const trendUpIcon = require('../../../assets/images/home/trendUp.png')
 const errorIcon = require('../../../assets/images/home/error.png')
@@ -27,11 +33,22 @@ const GOAL_UI_CONFIG = {
   },
 }
 
-function GoalStepperCard({ title, subtitle, icon, iconTint, pillBackground, value, cost, onChange }) {
+function GoalStepperCard({
+  title,
+  subtitle,
+  icon,
+  iconTint,
+  pillBackground,
+  value,
+  cost,
+  onChange,
+  onValueChange,
+  onValueBlur,
+}) {
   return (
     <ElevatedCard style={styles.goalCard}>
       <View style={styles.goalHeader}>
-        <View style={[styles.goalIconWrap, { backgroundColor: iconTint }]}>
+        <View style={[styles.goalIconWrap, { backgroundColor: iconTint }]}> 
           <Image source={icon} style={styles.goalIcon} resizeMode="contain" />
         </View>
 
@@ -41,8 +58,19 @@ function GoalStepperCard({ title, subtitle, icon, iconTint, pillBackground, valu
         </View>
       </View>
 
-      <View style={[styles.stepperPill, { backgroundColor: pillBackground }]}>
-        <Text style={styles.stepperValue}>{value}</Text>
+      <View style={[styles.stepperPill, { backgroundColor: pillBackground }]}> 
+        <TextInput
+          style={[styles.stepperValue, styles.stepperValueInput]}
+          value={value}
+          onChangeText={onValueChange}
+          onBlur={onValueBlur}
+          onSubmitEditing={onValueBlur}
+          keyboardType="numeric"
+          returnKeyType="done"
+          maxLength={5}
+          autoCorrect={false}
+          underlineColorAndroid="transparent"
+        />
 
         <View style={styles.stepperControls}>
           <Pressable hitSlop={8} onPress={() => onChange(1)} style={styles.stepperButton}>
@@ -81,9 +109,52 @@ export default function GoalsScreen({ navigation }) {
     [data]
   )
 
+  const [inputGoals, setInputGoals] = useState({
+    water: String(goals.water),
+    energy: String(goals.energy),
+  })
+
+  const [inputCosts, setInputCosts] = useState({
+    water: costs.water,
+    energy: costs.energy,
+  })
+
+  useEffect(() => {
+    setInputGoals({ water: String(goals.water), energy: String(goals.energy) })
+    setInputCosts({ water: costs.water, energy: costs.energy })
+  }, [goals, costs])
+
   async function handleGoalChange(resourceKey, direction) {
     const nextData = await updateGoal(resourceKey, direction)
     setData(nextData)
+  }
+
+  function handleGoalInputChange(resourceKey, rawValue) {
+    const sanitized = rawValue.replace(/\D/g, '')
+    const nextValue = sanitized === '' ? '' : String(Number(sanitized))
+
+    setInputGoals((prev) => ({ ...prev, [resourceKey]: nextValue }))
+
+    const numericValue = nextValue === '' ? 0 : Number(nextValue)
+    setInputCosts((prev) => ({
+      ...prev,
+      [resourceKey]: calculateGoalCost(resourceKey, numericValue),
+    }))
+  }
+
+  async function handleGoalInputBlur(resourceKey) {
+    const rawValue = inputGoals[resourceKey] ?? ''
+    const sanitized = rawValue.replace(/\D/g, '')
+    const numericValue = Number(sanitized || 0)
+    const config = GOAL_CONFIG[resourceKey]
+    const clampedValue = Number.isFinite(numericValue)
+      ? Math.max(config.minValue, Math.min(config.maxValue, numericValue))
+      : 0
+
+    const nextData = await setGoalValue(resourceKey, clampedValue)
+    setData(nextData)
+    setInputGoals((prev) => ({ ...prev, [resourceKey]: String(clampedValue) }))
+    setInputCosts((prev) => ({ ...prev, [resourceKey]: nextData.costs[resourceKey] }))
   }
 
   return (
@@ -136,9 +207,11 @@ export default function GoalsScreen({ navigation }) {
         icon={GOAL_UI_CONFIG.water.icon}
         iconTint={GOAL_UI_CONFIG.water.iconTint}
         pillBackground={GOAL_UI_CONFIG.water.pillBackground}
-        value={goals.water}
-        cost={costs.water}
+        value={inputGoals.water}
+        cost={inputCosts.water}
         onChange={(direction) => handleGoalChange('water', direction)}
+        onValueChange={(nextValue) => handleGoalInputChange('water', nextValue)}
+        onValueBlur={() => handleGoalInputBlur('water')}
       />
 
       <GoalStepperCard
@@ -147,9 +220,11 @@ export default function GoalsScreen({ navigation }) {
         icon={GOAL_UI_CONFIG.energy.icon}
         iconTint={GOAL_UI_CONFIG.energy.iconTint}
         pillBackground={GOAL_UI_CONFIG.energy.pillBackground}
-        value={goals.energy}
-        cost={costs.energy}
+        value={inputGoals.energy}
+        cost={inputCosts.energy}
         onChange={(direction) => handleGoalChange('energy', direction)}
+        onValueChange={(nextValue) => handleGoalInputChange('energy', nextValue)}
+        onValueBlur={() => handleGoalInputBlur('energy')}
       />
     </HomeFeatureScreen>
   )
@@ -274,6 +349,10 @@ const styles = StyleSheet.create({
     fontSize: 19,
     lineHeight: 22,
     fontFamily: 'Poppins_700Bold',
+  },
+  stepperValueInput: {
+    minWidth: 80,
+    padding: 0,
   },
   stepperControls: {
     gap: 2,
