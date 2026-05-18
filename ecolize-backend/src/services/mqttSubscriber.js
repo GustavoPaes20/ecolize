@@ -8,25 +8,66 @@ const db = require('../config/db');
 // dispositivo no banco com o MQTT_CLIENT_ID dele e ele já cai aqui.
 
 const TOPIC_MAP = {
-  [process.env.MQTT_TOPIC_VAZAO]: {
+  [process.env.MQTT_TOPIC_VAZAO || 'ESP32/agua']: {
     tipo: 'leitura',
     recurso: 'AGUA',
     unidade: 'L/min',
   },
-  [process.env.MQTT_TOPIC_CORRENTE]: {
+  [process.env.MQTT_TOPIC_CORRENTE || 'ESP32/luz']: {
     tipo: 'leitura',
     recurso: 'ENERGIA',
-    unidade: 'A',
+    unidade: 'kWh',
   },
-  [process.env.MQTT_TOPIC_VAZAO_STATUS]: {
+  [process.env.MQTT_TOPIC_VAZAO_STATUS || 'ESP32/agua/status']: {
     tipo: 'evento',
     sensor: 'VAZAO_AGUA',
   },
-  [process.env.MQTT_TOPIC_CORRENTE_STATUS]: {
+  [process.env.MQTT_TOPIC_CORRENTE_STATUS || 'ESP32/luz/status']: {
     tipo: 'evento',
     sensor: 'CORRENTE_ELETRICA',
   },
 };
+
+function parseJsonPayload(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    return null;
+  }
+}
+
+function extractAccumulatedValue(parsed, recurso) {
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  if (recurso === 'AGUA') {
+    if (typeof parsed.valor_acumulado === 'number') return { total: parsed.valor_acumulado, unit: 'm³' };
+    if (typeof parsed.total_L === 'number') return { total: parsed.total_L / 1000, unit: 'm³' };
+    if (typeof parsed.total_m3 === 'number') return { total: parsed.total_m3, unit: 'm³' };
+  }
+
+  if (recurso === 'ENERGIA') {
+    if (typeof parsed.valor_acumulado === 'number') return { total: parsed.valor_acumulado, unit: 'kWh' };
+    if (typeof parsed.total_kwh === 'number') return { total: parsed.total_kwh, unit: 'kWh' };
+    if (typeof parsed.total_kW === 'number') return { total: parsed.total_kW, unit: 'kWh' };
+  }
+
+  return null;
+}
+
+async function getLastAccumulatedTotal(idDispositivo, tipoRecurso) {
+  const [rows] = await db.query(
+    `SELECT PAYLOAD_RAW FROM LEITURA
+     WHERE ID_DISPOSITIVO = ? AND TIPO_RECURSO = ?
+     ORDER BY HORA_DATA_LEITURA DESC
+     LIMIT 1`,
+    [idDispositivo, tipoRecurso]
+  );
+
+  if (rows.length === 0) return null;
+  const parsed = parseJsonPayload(rows[0].PAYLOAD_RAW);
+  const acc = extractAccumulatedValue(parsed, tipoRecurso);
+  return acc ? acc.total : null;
+}
 
 // ============================================
 // Funções de gravação no banco
@@ -53,11 +94,8 @@ async function gravarLeitura(topico, payload) {
   const config = TOPIC_MAP[topico];
   if (!config || config.tipo !== 'leitura') return;
 
-  const valor = parseFloat(payload);
-  if (Number.isNaN(valor)) {
-    console.warn(`[MQTT] Payload inválido em ${topico}: ${payload}`);
-    return;
-  }
+  const parsed = parseJsonPayload(payload);
+  const accumulated = extractAccumulatedValue(parsed, config.recurso);
 
   const tipoSensor = config.recurso === 'AGUA' ? 'VAZAO_AGUA' : 'CORRENTE_ELETRICA';
   const idDispositivo = await descobrirDispositivo(tipoSensor);
@@ -67,14 +105,41 @@ async function gravarLeitura(topico, payload) {
     return;
   }
 
+  let valor = null;
+  let unidade = config.unidade;
+  let payloadRaw = payload;
+
+  if (accumulated) {
+    const previousTotal = await getLastAccumulatedTotal(idDispositivo, config.recurso);
+    if (previousTotal !== null) {
+      const delta = parseFloat((accumulated.total - previousTotal).toFixed(4));
+      if (delta < 0) {
+        console.warn(`[MQTT] Leitura acumulada menor que a anterior em ${topico}. Ignorando.`);
+        return;
+      }
+      valor = delta;
+    } else {
+      valor = 0;
+      console.log(`[MQTT] Primeira leitura acumulada para ${config.recurso}. Usando baseline 0.`);
+    }
+    unidade = accumulated.unit;
+  } else {
+    const numeric = parseFloat(payload);
+    if (Number.isNaN(numeric)) {
+      console.warn(`[MQTT] Payload inválido em ${topico}: ${payload}`);
+      return;
+    }
+    valor = numeric;
+  }
+
   await db.query(
     `INSERT INTO LEITURA 
      (ID_DISPOSITIVO, TIPO_RECURSO, VALOR_CONSUMO, UNIDADE, PAYLOAD_RAW) 
      VALUES (?, ?, ?, ?, ?)`,
-    [idDispositivo, config.recurso, valor, config.unidade, payload]
+    [idDispositivo, config.recurso, valor, unidade, payloadRaw]
   );
 
-  console.log(`[MQTT] ✓ Leitura ${config.recurso}: ${valor} ${config.unidade} (disp ${idDispositivo})`);
+  console.log(`[MQTT] ✓ Leitura ${config.recurso}: ${valor} ${unidade} (disp ${idDispositivo})`);
 }
 
 async function gravarEvento(topico, payload) {

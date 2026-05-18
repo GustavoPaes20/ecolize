@@ -1,95 +1,100 @@
-const { getEsp32Device } = require('../services/deviceService')
-const { getLastRawReading } = require('../services/readingService')
+const db = require('../config/db')
+const { calculateEstimatedCosts } = require('../services/tarifaService')
 
-function parseTimestamp(value) {
-  if (!value) return new Date()
-  const parsed = new Date(value)
-  return Number.isNaN(parsed.getTime()) ? null : parsed
-}
-
-function validateNumber(value) {
-  return typeof value === 'number' && !Number.isNaN(value)
-}
-
-async function createEsp32Reading(req, res, tipoRecurso) {
-  const deviceId = req.header('X-Device-Id')
-  const deviceToken = req.header('X-Device-Token')
-  const { valor_acumulado, timestamp, rssi, bateria_pct } = req.body
-
-  if (!deviceId) {
-    return res.status(400).json({ message: 'Cabeçalho X-Device-Id é obrigatório.' })
-  }
-
-  if (!validateNumber(valor_acumulado)) {
-    return res.status(400).json({ message: 'valor_acumulado deve ser um número válido.' })
-  }
-
-  const leituraHora = parseTimestamp(timestamp)
-  if (timestamp && !leituraHora) {
-    return res.status(400).json({ message: 'timestamp inválido. Use ISO 8601.' })
-  }
-
+function parsePayloadRaw(raw) {
   try {
-    const device = await getEsp32Device(deviceId, deviceToken)
-    if (!device) {
-      return res.status(401).json({ message: 'Dispositivo ESP32 não autorizado ou não encontrado.' })
-    }
+    return JSON.parse(raw)
+  } catch (err) {
+    return null
+  }
+}
 
-    const lastReading = await getLastRawReading(device.ID, tipoRecurso)
-    let consumoDelta = 0
+function formatReading(row) {
+  if (!row) return null
+  return {
+    valor_consumo: row.VALOR_CONSUMO,
+    unidade: row.UNIDADE,
+    payload: parsePayloadRaw(row.PAYLOAD_RAW) || row.PAYLOAD_RAW,
+    timestamp: row.HORA_DATA_LEITURA,
+  }
+}
 
-    if (lastReading && lastReading.raw && typeof lastReading.raw.valor_acumulado === 'number') {
-      if (valor_acumulado < lastReading.raw.valor_acumulado) {
-        return res.status(400).json({
-          message: 'Leitura acumulada menor que a última leitura registrada. Verifique o medidor ou o ESP.',
-          anomaly: true,
-        })
-      }
-      consumoDelta = parseFloat((valor_acumulado - lastReading.raw.valor_acumulado).toFixed(4))
-      if (consumoDelta < 0) {
-        return res.status(400).json({ message: 'Consumo calculado inválido.' })
-      }
-      const tempoSegundos = (leituraHora - new Date(lastReading.hora_data_leitura)) / 1000
-      if (tempoSegundos < 60) {
-        return res.status(429).json({ message: 'Leitura muito frequente. Aguarde pelo menos 60 segundos entre envios.' })
-      }
-    }
-
-    const payloadRaw = JSON.stringify({
-      valor_acumulado,
-      timestamp: leituraHora.toISOString(),
-      rssi: validateNumber(rssi) ? rssi : null,
-      bateria_pct: validateNumber(bateria_pct) ? bateria_pct : null,
-    })
-
-    const unidade = tipoRecurso === 'ENERGIA' ? 'kWh' : 'm³'
-    const query = `INSERT INTO LEITURA
-      (ID_DISPOSITIVO, TIPO_RECURSO, VALOR_CONSUMO, HORA_DATA_LEITURA, UNIDADE, PAYLOAD_RAW)
-      VALUES (?, ?, ?, ?, ?, ?)`
-
-    const [result] = await require('../config/db').query(
-      query,
-      [device.ID, tipoRecurso, consumoDelta, leituraHora, unidade, payloadRaw]
+async function getLatestReading(req, res) {
+  try {
+    const [aguaRows] = await db.query(
+      `SELECT VALOR_CONSUMO, UNIDADE, PAYLOAD_RAW, HORA_DATA_LEITURA
+       FROM LEITURA
+       WHERE TIPO_RECURSO = 'AGUA'
+       ORDER BY HORA_DATA_LEITURA DESC
+       LIMIT 1`
+    )
+    const [energiaRows] = await db.query(
+      `SELECT VALOR_CONSUMO, UNIDADE, PAYLOAD_RAW, HORA_DATA_LEITURA
+       FROM LEITURA
+       WHERE TIPO_RECURSO = 'ENERGIA'
+       ORDER BY HORA_DATA_LEITURA DESC
+       LIMIT 1`
     )
 
-    return res.status(201).json({
-      status: 'ok',
-      leitura_id: result.insertId,
-      consumo_delta: consumoDelta,
-      proxima_leitura_em_segundos: 300,
+    return res.status(200).json({
+      agua: formatReading(aguaRows[0]),
+      energia: formatReading(energiaRows[0]),
     })
   } catch (err) {
-    console.error('Erro ao registrar leitura ESP32:', err)
+    console.error('Erro ao buscar última leitura:', err)
     return res.status(500).json({ message: 'Erro interno do servidor.' })
   }
 }
 
-async function createEsp32WaterReading(req, res) {
-  return createEsp32Reading(req, res, 'AGUA')
+async function getLatestReadingWithCosts(req, res) {
+  try {
+    const [aguaRows] = await db.query(
+      `SELECT VALOR_CONSUMO, UNIDADE, PAYLOAD_RAW, HORA_DATA_LEITURA
+       FROM LEITURA
+       WHERE TIPO_RECURSO = 'AGUA'
+       ORDER BY HORA_DATA_LEITURA DESC
+       LIMIT 1`
+    )
+    const [energiaRows] = await db.query(
+      `SELECT VALOR_CONSUMO, UNIDADE, PAYLOAD_RAW, HORA_DATA_LEITURA
+       FROM LEITURA
+       WHERE TIPO_RECURSO = 'ENERGIA'
+       ORDER BY HORA_DATA_LEITURA DESC
+       LIMIT 1`
+    )
+
+    const consumoEnergia = energiaRows[0]?.VALOR_CONSUMO || 0
+    const consumoAgua = aguaRows[0]?.VALOR_CONSUMO || 0
+
+    const costs = await calculateEstimatedCosts(req.userId, consumoEnergia, consumoAgua)
+
+    return res.status(200).json({
+      consumo: {
+        agua: formatReading(aguaRows[0]),
+        energia: formatReading(energiaRows[0]),
+      },
+      custo_estimado: costs,
+    })
+  } catch (err) {
+    console.error('Erro ao buscar leitura com custo:', err)
+    return res.status(500).json({ message: 'Erro interno do servidor.' })
+  }
 }
 
-async function createEsp32EnergyReading(req, res) {
-  return createEsp32Reading(req, res, 'ENERGIA')
+async function getStatus(req, res) {
+  try {
+    const [rows] = await db.query(
+      `SELECT EVENTO FROM EVENTO_COLETA
+       ORDER BY ID DESC
+       LIMIT 1`
+    )
+    return res.status(200).json({
+      status: rows[0]?.EVENTO || 'offline',
+    })
+  } catch (err) {
+    console.error('Erro ao buscar status ESP32:', err)
+    return res.status(500).json({ message: 'Erro interno do servidor.' })
+  }
 }
 
-module.exports = { createEsp32WaterReading, createEsp32EnergyReading }
+module.exports = { getLatestReading, getLatestReadingWithCosts, getStatus }

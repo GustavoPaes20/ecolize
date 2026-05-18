@@ -1,10 +1,12 @@
 import { Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { useEffect, useState } from 'react'
 
 import ScreenState from '../../components/common/ScreenState'
 import ElevatedCard from '../../components/home/ElevatedCard'
 import { useAuth } from '../../context/AuthContext'
 import useAsyncData from '../../hooks/useAsyncData'
+import useLiveReading from '../../hooks/useLiveReading'
 import { getHomeDashboard } from '../../services/dashboardService'
 
 const avatarImage = require('../../../assets/images/home/avatar.png')
@@ -78,11 +80,45 @@ function RankingRow({ position, name, house, delta, isLast }) {
 export default function HomeScreen({ navigation }) {
   const { user } = useAuth()
   const { data, loading, error, reload } = useAsyncData(getHomeDashboard, [])
+  const { data: liveData } = useLiveReading(2000)
+  const [dashboard, setDashboard] = useState(data)
   const { width } = useWindowDimensions()
   const horizontalMargin = 45
   const metricsGap = 16
   const metricCardWidth = (width - horizontalMargin * 2 - metricsGap) / 2
 
+  useEffect(() => {
+    if (liveData && liveData.consumo) {
+      setDashboard(prevDashboard => {
+        if (!prevDashboard) return prevDashboard
+        const updated = { ...prevDashboard }
+        
+        updated.consumptionCards = updated.consumptionCards.map(card => {
+          if (card.resourceKey === 'water' && liveData.consumo.agua) {
+            const valor = parseFloat(liveData.consumo.agua.valor_consumo || 0)
+            return { ...card, value: `${valor.toFixed(3)} m³` }
+          }
+          if (card.resourceKey === 'energy' && liveData.consumo.energia) {
+            const valor = parseFloat(liveData.consumo.energia.valor_consumo || 0)
+            return { ...card, value: `${valor.toFixed(2)} kWh` }
+          }
+          return card
+        })
+        
+        if (liveData.custo_estimado && liveData.custo_estimado.total) {
+          updated.estimatedSavings = `R$ ${liveData.custo_estimado.total.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        }
+        
+        return updated
+      })
+    }
+  }, [liveData])
+
+  useEffect(() => {
+    if (data) {
+      setDashboard(data)
+    }
+  }, [data])
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
@@ -111,10 +147,10 @@ export default function HomeScreen({ navigation }) {
 
             <View style={styles.headerBottomRow}>
               <Text style={styles.sectionTitle}>
-                {`Resumo de ${data?.monthLabel || 'maio'}`}
+                {`Resumo de ${dashboard?.monthLabel || 'maio'}`}
               </Text>
               <View style={styles.activeGoalPill}>
-                <Text style={styles.activeGoalText}>{data?.activeGoalLabel || 'Meta ativa'}</Text>
+                <Text style={styles.activeGoalText}>{dashboard?.activeGoalLabel || 'Meta ativa'}</Text>
               </View>
             </View>
           </View>
@@ -122,7 +158,7 @@ export default function HomeScreen({ navigation }) {
           <ElevatedCard style={styles.savingsCard}>
             <View>
               <Text style={styles.savingsLabel}>Economia estimada</Text>
-              <Text style={styles.savingsValue}>{data?.estimatedSavings || 'R$ 0,00'}</Text>
+              <Text style={styles.savingsValue}>{dashboard?.estimatedSavings || 'R$ 0,00'}</Text>
             </View>
 
             <View style={styles.savingsIconWrap}>
@@ -131,7 +167,7 @@ export default function HomeScreen({ navigation }) {
           </ElevatedCard>
 
           <View style={styles.metricsRow}>
-            {(data?.consumptionCards || []).map((card) => (
+            {(dashboard?.consumptionCards || []).map((card) => (
               <ConsumptionCard
                 key={card.title}
                 {...card}

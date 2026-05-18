@@ -2,23 +2,23 @@ const db = require('../config/db');
 
 // POST para registrar um novo dispositivo vinculado ao usuário
 async function registerDevice(req, res) {
-  const { endereco_ip } = req.body;
+  const { mac_address } = req.body;
 
-  if (!endereco_ip) {
-    return res.status(400).json({ message: 'Endereço IP do dispositivo é obrigatório.' });
+  if (!mac_address) {
+    return res.status(400).json({ message: 'Endereço MAC do dispositivo é obrigatório.' });
   }
 
   try {
     const [result] = await db.query(
-      'INSERT INTO DISPOSITIVOS (ID_USUARIO, ENDEREÇO_IP) VALUES (?, ?)',
-      [req.userId, endereco_ip]
+      'INSERT INTO DISPOSITIVOS (ID_USUARIO, ENDERECO_MAC) VALUES (?, ?)',
+      [req.userId, mac_address]
     );
     return res.status(201).json({
       message: 'Dispositivo registrado com sucesso.',
       device: {
         id: result.insertId,
         id_usuario: req.userId,
-        endereco_ip,
+        mac_address: mac_address,
       },
     });
   } catch (err) {
@@ -30,7 +30,7 @@ async function registerDevice(req, res) {
 async function listDevices(req, res) {
   try {
     const [rows] = await db.query(
-      'SELECT ID, ENDEREÇO_IP FROM DISPOSITIVOS WHERE ID_USUARIO = ?',
+      'SELECT ID, ENDERECO_MAC FROM DISPOSITIVOS WHERE ID_USUARIO = ?',
       [req.userId]
     );
     return res.status(200).json({ devices: rows });
