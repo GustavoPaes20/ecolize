@@ -7,6 +7,7 @@ const userRoutes = require('./routes/userRoutes');
 const goalsRoutes = require('./routes/goalsRoutes');
 const devicesRoutes = require('./routes/devicesRoutes');    
 const readingsRoutes = require('./routes/readingsRoutes');
+const esp32Routes = require('./routes/esp32Routes');
 const rankingRoutes = require('./routes/rankingRoutes');
 const { startMqttSubscriber } = require('./services/mqttSubscriber');
 
@@ -22,6 +23,7 @@ app.use('/users', userRoutes);
 app.use('/goals', goalsRoutes);
 app.use('/devices', devicesRoutes);
 app.use('/readings', readingsRoutes);
+app.use('/api/esp32', esp32Routes);
 app.use('/ranking', rankingRoutes);
 
 app.get('/health', (req, res) => {

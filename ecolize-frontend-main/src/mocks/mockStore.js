@@ -54,7 +54,7 @@ const rankingData = {
 const resources = {
   water: {
     title: 'Controle de Água',
-    currentValue: '12.4m³',
+    currentValue: '0.0 m³',
     comparisonText: '12% melhor que o mês passado',
     tipText:
       'O pico no Sábado indica provável uso da máquina de lavar. Tente acumular mais roupas para uma única lavagem!',
@@ -74,7 +74,7 @@ const resources = {
   },
   energy: {
     title: 'Controle de Luz',
-    currentValue: '165 kWh',
+    currentValue: '0 kWh',
     comparisonText: '8% melhor que o mês passado',
     tipText:
       'O pico no Sábado indica provável uso de equipamentos de alto consumo. Evite ligar vários aparelhos ao mesmo tempo.',

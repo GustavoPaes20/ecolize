@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { calculateEstimatedCosts } = require('../services/tarifaService');
 
 // POST para o hardware enviar uma leitura
 async function createReading(req, res) {
@@ -109,12 +110,6 @@ async function getReadings(req, res) {
 // GET para resumo de consumo + custo estimado
 async function getSummary(req, res) {
   try {
-    // Busca as metas/tarifas do usuário
-    const [meta] = await db.query(
-      'SELECT META_AGUA, META_LUZ, VALOR_ENERGIA_KWH, VALOR_AGUA_M3 FROM CONSUMO_META WHERE ID_USUARIO = ?',
-      [req.userId]
-    );
-
     // Busca consumo do mês atual
     const [rows] = await db.query(
       `SELECT L.TIPO_RECURSO, SUM(L.VALOR_CONSUMO) as TOTAL
@@ -130,18 +125,8 @@ async function getSummary(req, res) {
     const consumoEnergia = rows.find(r => r.TIPO_RECURSO === 'ENERGIA')?.TOTAL || 0;
     const consumoAgua = rows.find(r => r.TIPO_RECURSO === 'AGUA')?.TOTAL || 0;
 
-    // Calcula custo estimado (se o usuário tiver metas cadastradas)
-    let custoEnergia = null;
-    let custoAgua = null;
-    let metaAgua = null;
-    let metaLuz = null;
+    const costs = await calculateEstimatedCosts(req.userId, consumoEnergia, consumoAgua);
 
-    if (meta.length > 0) {
-      custoEnergia = parseFloat((consumoEnergia * meta[0].VALOR_ENERGIA_KWH).toFixed(2));
-      custoAgua = parseFloat((consumoAgua * meta[0].VALOR_AGUA_M3).toFixed(2));
-      metaAgua = meta[0].META_AGUA;
-      metaLuz = meta[0].META_LUZ;
-    }
     return res.status(200).json({
       mes_atual: new Date().toLocaleString('pt-BR', { month: 'long', year: 'numeric' }),
       consumo: {
@@ -149,13 +134,11 @@ async function getSummary(req, res) {
         agua_m3: parseFloat(consumoAgua.toFixed(2)),
       },
       custo_estimado: {
-        energia_reais: custoEnergia,
-        agua_reais: custoAgua,
+        energia: costs.energia ?? null,
+        agua: costs.agua ?? null,
+        total: costs.total,
       },
-      metas: {
-        meta_agua: metaAgua,
-        meta_luz: metaLuz,
-      },
+      perfil_tarifario: costs.profile,
     });
   } catch (err) {
     console.error('Erro ao buscar resumo:', err);
