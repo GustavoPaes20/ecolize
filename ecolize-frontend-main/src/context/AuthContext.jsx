@@ -6,6 +6,7 @@ import {
   logout as logoutRequest,
   register as registerRequest,
 } from '../services/authService'
+import { disconnectSocket } from '../services/socketClient'
 
 const AuthContext = createContext(null)
 
@@ -46,6 +47,7 @@ export function AuthProvider({ children }) {
   }
 
   async function logout() {
+    await disconnectSocket()
     await logoutRequest()
     setUser(null)
     setToken(null)

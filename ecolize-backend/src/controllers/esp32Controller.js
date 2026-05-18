@@ -48,30 +48,42 @@ async function getLatestReading(req, res) {
 
 async function getLatestReadingWithCosts(req, res) {
   try {
-    const [aguaRows] = await db.query(
-      `SELECT VALOR_CONSUMO, UNIDADE, PAYLOAD_RAW, HORA_DATA_LEITURA
-       FROM LEITURA
-       WHERE TIPO_RECURSO = 'AGUA'
-       ORDER BY HORA_DATA_LEITURA DESC
-       LIMIT 1`
+    const [aguaTotalRows] = await db.query(
+      `SELECT COALESCE(SUM(L.VALOR_CONSUMO), 0) AS TOTAL
+       FROM LEITURA L
+       JOIN DISPOSITIVOS D ON L.ID_DISPOSITIVO = D.ID
+       WHERE D.ID_USUARIO = ?
+         AND L.TIPO_RECURSO = 'AGUA'
+         AND MONTH(L.HORA_DATA_LEITURA) = MONTH(NOW())
+         AND YEAR(L.HORA_DATA_LEITURA) = YEAR(NOW())`,
+      [req.userId]
     )
-    const [energiaRows] = await db.query(
-      `SELECT VALOR_CONSUMO, UNIDADE, PAYLOAD_RAW, HORA_DATA_LEITURA
-       FROM LEITURA
-       WHERE TIPO_RECURSO = 'ENERGIA'
-       ORDER BY HORA_DATA_LEITURA DESC
-       LIMIT 1`
+    const [energiaTotalRows] = await db.query(
+      `SELECT COALESCE(SUM(L.VALOR_CONSUMO), 0) AS TOTAL
+       FROM LEITURA L
+       JOIN DISPOSITIVOS D ON L.ID_DISPOSITIVO = D.ID
+       WHERE D.ID_USUARIO = ?
+         AND L.TIPO_RECURSO = 'ENERGIA'
+         AND MONTH(L.HORA_DATA_LEITURA) = MONTH(NOW())
+         AND YEAR(L.HORA_DATA_LEITURA) = YEAR(NOW())`,
+      [req.userId]
     )
 
-    const consumoEnergia = energiaRows[0]?.VALOR_CONSUMO || 0
-    const consumoAgua = aguaRows[0]?.VALOR_CONSUMO || 0
+    const consumoEnergia = parseFloat((energiaTotalRows[0]?.TOTAL || 0).toFixed(2))
+    const consumoAgua = parseFloat((aguaTotalRows[0]?.TOTAL || 0).toFixed(3))
 
     const costs = await calculateEstimatedCosts(req.userId, consumoEnergia, consumoAgua)
 
     return res.status(200).json({
       consumo: {
-        agua: formatReading(aguaRows[0]),
-        energia: formatReading(energiaRows[0]),
+        agua: {
+          valor_consumo: consumoAgua,
+          unidade: 'm³',
+        },
+        energia: {
+          valor_consumo: consumoEnergia,
+          unidade: 'kWh',
+        },
       },
       custo_estimado: costs,
     })

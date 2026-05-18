@@ -96,7 +96,7 @@ export default function HomeScreen({ navigation }) {
         updated.consumptionCards = updated.consumptionCards.map(card => {
           if (card.resourceKey === 'water' && liveData.consumo.agua) {
             const valor = parseFloat(liveData.consumo.agua.valor_consumo || 0)
-            return { ...card, value: `${valor.toFixed(3)} m³` }
+            return { ...card, value: `${valor.toFixed(2)} m³` }
           }
           if (card.resourceKey === 'energy' && liveData.consumo.energia) {
             const valor = parseFloat(liveData.consumo.energia.valor_consumo || 0)

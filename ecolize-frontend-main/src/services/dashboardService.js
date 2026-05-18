@@ -15,7 +15,7 @@ export async function getHomeDashboard() {
         if (card.resourceKey === 'water' && data.consumo.agua) {
           return {
             ...card,
-            value: `${parseFloat(data.consumo.agua.valor_consumo || 0).toFixed(3)} m³`,
+            value: `${parseFloat(data.consumo.agua.valor_consumo || 0).toFixed(2)} m³`,
           }
         }
         if (card.resourceKey === 'energy' && data.consumo.energia) {

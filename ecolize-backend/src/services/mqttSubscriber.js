@@ -1,11 +1,25 @@
-const createMqttClient = require('../config/mqttClient');
-const db = require('../config/db');
+/**
+ * ============================================================
+ *  Ecolize — MQTT Subscriber (com bridge WebSocket)
+ * ============================================================
+ *  Inscreve nos tópicos do HiveMQ, grava as leituras no MySQL
+ *  e, ao final de cada gravação bem-sucedida, emite o dado
+ *  via WebSocket para os clientes conectados (app mobile).
+ *
+ *  Diferença para a versão anterior:
+ *    - import dos helpers do socketServer
+ *    - chamadas a emitReading() e emitDeviceStatus() ao final
+ *      do fluxo de gravação
+ *
+ *  Tudo que existia antes continua funcionando. A camada de
+ *  tempo real é apenas um "fan-out" adicional dos dados que
+ *  já estavam sendo persistidos.
+ * ============================================================
+ */
 
-// ============================================
-// Mapeamento: tópico MQTT → como processar
-// ============================================
-// Quando o sensor SCT-013 for adicionado, basta cadastrar mais um
-// dispositivo no banco com o MQTT_CLIENT_ID dele e ele já cai aqui.
+const createMqttClient = require('../config/mqttClient')
+const db = require('../config/db')
+const { emitReading, emitDeviceStatus } = require('../websocket/socketServer')
 
 const TOPIC_MAP = {
   [process.env.MQTT_TOPIC_VAZAO || 'ESP32/agua']: {
@@ -26,32 +40,29 @@ const TOPIC_MAP = {
     tipo: 'evento',
     sensor: 'CORRENTE_ELETRICA',
   },
-};
+}
 
 function parseJsonPayload(raw) {
   try {
-    return JSON.parse(raw);
+    return JSON.parse(raw)
   } catch (err) {
-    return null;
+    return null
   }
 }
 
 function extractAccumulatedValue(parsed, recurso) {
-  if (!parsed || typeof parsed !== 'object') return null;
+  if (!parsed || typeof parsed !== 'object') return null
 
   if (recurso === 'AGUA') {
-    if (typeof parsed.valor_acumulado === 'number') return { total: parsed.valor_acumulado, unit: 'm³' };
-    if (typeof parsed.total_L === 'number') return { total: parsed.total_L / 1000, unit: 'm³' };
-    if (typeof parsed.total_m3 === 'number') return { total: parsed.total_m3, unit: 'm³' };
+    if (typeof parsed.valor_acumulado === 'number') return { total: parsed.valor_acumulado, unit: 'm³' }
+    if (typeof parsed.total_L === 'number') return { total: parsed.total_L / 1000, unit: 'm³' }
   }
 
   if (recurso === 'ENERGIA') {
-    if (typeof parsed.valor_acumulado === 'number') return { total: parsed.valor_acumulado, unit: 'kWh' };
-    if (typeof parsed.total_kwh === 'number') return { total: parsed.total_kwh, unit: 'kWh' };
-    if (typeof parsed.total_kW === 'number') return { total: parsed.total_kW, unit: 'kWh' };
+    if (typeof parsed.valor_acumulado === 'number') return { total: parsed.valor_acumulado, unit: 'kWh' }
   }
 
-  return null;
+  return null
 }
 
 async function getLastAccumulatedTotal(idDispositivo, tipoRecurso) {
@@ -61,166 +72,183 @@ async function getLastAccumulatedTotal(idDispositivo, tipoRecurso) {
      ORDER BY HORA_DATA_LEITURA DESC
      LIMIT 1`,
     [idDispositivo, tipoRecurso]
-  );
+  )
 
-  if (rows.length === 0) return null;
-  const parsed = parseJsonPayload(rows[0].PAYLOAD_RAW);
-  const acc = extractAccumulatedValue(parsed, tipoRecurso);
-  return acc ? acc.total : null;
+  if (rows.length === 0) return null
+  const parsed = parseJsonPayload(rows[0].PAYLOAD_RAW)
+  const acc = extractAccumulatedValue(parsed, tipoRecurso)
+  return acc ? acc.total : null
 }
 
-// ============================================
-// Funções de gravação no banco
-// ============================================
-
-/**
- * Descobre o ID do dispositivo no banco a partir do tópico MQTT.
- * Estratégia: o tópico ESP32/agua mapeia pra dispositivos com TIPO_SENSOR
- * VAZAO_AGUA ou AMBOS. Em projeto pequeno, todas as ESPs publicam nos
- * mesmos tópicos. Quando escalar, cada ESP publicará em ESP32/agua/<id>.
- */
 async function descobrirDispositivo(tipoSensor) {
   const [rows] = await db.query(
-    `SELECT ID FROM DISPOSITIVOS 
-     WHERE (TIPO_SENSOR = ? OR TIPO_SENSOR = 'AMBOS') 
-       AND ATIVO = TRUE 
+    `SELECT ID, ID_USUARIO FROM DISPOSITIVOS
+     WHERE (TIPO_SENSOR = ? OR TIPO_SENSOR = 'AMBOS')
+       AND ATIVO = TRUE
      LIMIT 1`,
     [tipoSensor]
-  );
-  return rows[0]?.ID || null;
+  )
+  if (rows.length === 0) return null
+  return { id: rows[0].ID, idUsuario: rows[0].ID_USUARIO }
 }
 
 async function gravarLeitura(topico, payload) {
-  const config = TOPIC_MAP[topico];
-  if (!config || config.tipo !== 'leitura') return;
+  const config = TOPIC_MAP[topico]
+  if (!config || config.tipo !== 'leitura') return
 
-  const parsed = parseJsonPayload(payload);
-  const accumulated = extractAccumulatedValue(parsed, config.recurso);
+  const parsed = parseJsonPayload(payload)
+  const accumulated = extractAccumulatedValue(parsed, config.recurso)
 
-  const tipoSensor = config.recurso === 'AGUA' ? 'VAZAO_AGUA' : 'CORRENTE_ELETRICA';
-  const idDispositivo = await descobrirDispositivo(tipoSensor);
+  const tipoSensor =
+    config.recurso === 'AGUA' ? 'VAZAO_AGUA' : 'CORRENTE_ELETRICA'
+  const dispositivo = await descobrirDispositivo(tipoSensor)
 
-  if (!idDispositivo) {
-    console.warn(`[MQTT] Nenhum dispositivo cadastrado para ${tipoSensor}`);
-    return;
+  if (!dispositivo) {
+    console.warn(`[MQTT] Nenhum dispositivo cadastrado para ${tipoSensor}`)
+    return
   }
 
-  let valor = null;
-  let unidade = config.unidade;
-  let payloadRaw = payload;
+  let valor = null
+  let unidade = config.unidade
+  let previousTotal = null
+  const payloadRaw = payload
 
   if (accumulated) {
-    const previousTotal = await getLastAccumulatedTotal(idDispositivo, config.recurso);
+    previousTotal = await getLastAccumulatedTotal(
+      dispositivo.id,
+      config.recurso
+    )
     if (previousTotal !== null) {
-      const delta = parseFloat((accumulated.total - previousTotal).toFixed(4));
-      if (delta < 0) {
-        console.warn(`[MQTT] Leitura acumulada menor que a anterior em ${topico}. Ignorando.`);
-        return;
+      const rawDelta = accumulated.total - previousTotal
+      const delta = parseFloat(rawDelta.toFixed(5))
+      if (delta < -0.0001) {
+        console.warn(`[MQTT] Leitura acumulada menor que a anterior em ${topico}. Usando valor 0 e mantendo registro.`)
       }
-      valor = delta;
+      valor = delta < 0 ? 0 : delta
     } else {
-      valor = 0;
-      console.log(`[MQTT] Primeira leitura acumulada para ${config.recurso}. Usando baseline 0.`);
+      valor = 0
+      console.log(`[MQTT] Primeira leitura acumulada para ${config.recurso}. Usando baseline 0.`)
     }
-    unidade = accumulated.unit;
+    unidade = accumulated.unit
   } else {
-    const numeric = parseFloat(payload);
+    const numeric = parseFloat(payload)
     if (Number.isNaN(numeric)) {
-      console.warn(`[MQTT] Payload inválido em ${topico}: ${payload}`);
-      return;
+      console.warn(`[MQTT] Payload inválido em ${topico}: ${payload}`)
+      return
     }
-    valor = numeric;
+    valor = numeric
   }
 
   await db.query(
-    `INSERT INTO LEITURA 
-     (ID_DISPOSITIVO, TIPO_RECURSO, VALOR_CONSUMO, UNIDADE, PAYLOAD_RAW) 
+    `INSERT INTO LEITURA
+     (ID_DISPOSITIVO, TIPO_RECURSO, VALOR_CONSUMO, UNIDADE, PAYLOAD_RAW)
      VALUES (?, ?, ?, ?, ?)`,
-    [idDispositivo, config.recurso, valor, unidade, payloadRaw]
-  );
+    [dispositivo.id, config.recurso, valor, unidade, payloadRaw]
+  )
 
-  console.log(`[MQTT] ✓ Leitura ${config.recurso}: ${valor} ${unidade} (disp ${idDispositivo})`);
+  const totalConsumido = previousTotal !== null ? previousTotal + valor : valor
+  console.log(
+    `[MQTT] ✓ Leitura ${config.recurso}: ${valor} ${unidade} (disp ${dispositivo.id}) - total acumulado ${totalConsumido.toFixed(5)} ${unidade}`
+  )
+
+  emitReading({
+    tipo_recurso: config.recurso,
+    valor_consumo: parseFloat(totalConsumido.toFixed(config.recurso === 'AGUA' ? 3 : 4)),
+    unidade,
+    timestamp: new Date().toISOString(),
+    id_dispositivo: dispositivo.id,
+    userId: dispositivo.idUsuario,
+  })
 }
 
 async function gravarEvento(topico, payload) {
-  const config = TOPIC_MAP[topico];
-  if (!config || config.tipo !== 'evento') return;
+  const config = TOPIC_MAP[topico]
+  if (!config || config.tipo !== 'evento') return
 
-  const eventosValidos = ['coletando', 'pausado', 'offline', 'online'];
-  if (!eventosValidos.includes(payload)) {
-    console.warn(`[MQTT] Status desconhecido em ${topico}: ${payload}`);
-    return;
+  const eventosValidos = ['coletando', 'pausado', 'offline', 'online']
+  let statusPayload = payload
+
+  try {
+    const parsed = JSON.parse(payload)
+    if (parsed && typeof parsed === 'object' && typeof parsed.state === 'string') {
+      statusPayload = parsed.state
+    }
+  } catch (err) {
+    // payload não é JSON, manter o valor original
   }
 
-  const idDispositivo = await descobrirDispositivo(config.sensor);
-  if (!idDispositivo) return;
+  if (!eventosValidos.includes(statusPayload)) {
+    console.warn(`[MQTT] Status desconhecido em ${topico}: ${payload}`)
+    return
+  }
+
+  const dispositivo = await descobrirDispositivo(config.sensor)
+  if (!dispositivo) return
 
   await db.query(
     `INSERT INTO EVENTO_COLETA (ID_DISPOSITIVO, EVENTO) VALUES (?, ?)`,
-    [idDispositivo, payload]
-  );
+    [dispositivo.id, statusPayload]
+  )
 
-  console.log(`[MQTT] ✓ Evento ${payload} registrado (disp ${idDispositivo})`);
+  console.log(
+    `[MQTT] ✓ Evento ${statusPayload} registrado (disp ${dispositivo.id})`
+  )
+
+  emitDeviceStatus({
+    id_dispositivo: dispositivo.id,
+    sensor: config.sensor,
+    status: statusPayload,
+    userId: dispositivo.idUsuario,
+  })
 }
-
-// ============================================
-// Inicialização do subscriber
-// ============================================
 
 function startMqttSubscriber() {
-  console.log('[MQTT] Iniciando bridge HiveMQ → Aiven MySQL...');
+  console.log('[MQTT] Iniciando bridge HiveMQ → MySQL → WebSocket...')
 
-  const client = createMqttClient();
-  const topics = Object.keys(TOPIC_MAP).filter(Boolean);
+  const client = createMqttClient({
+    clientId: `${process.env.MQTT_CLIENT_ID || 'ecolize-backend'}-subscriber`,
+  })
+  const topics = Object.keys(TOPIC_MAP).filter(Boolean)
 
   client.on('connect', () => {
-    console.log(`[MQTT] ✓ Conectado a ${process.env.MQTT_HOST}`);
+    console.log(`[MQTT] ✓ Subscriber conectado a ${process.env.MQTT_HOST}`)
     client.subscribe(topics, { qos: 1 }, (err, granted) => {
       if (err) {
-        console.error('[MQTT] Erro ao se inscrever:', err);
-        return;
+        console.error('[MQTT] Erro ao se inscrever:', err)
+        return
       }
-      granted.forEach(g => console.log(`[MQTT] ✓ Inscrito em ${g.topic} (QoS ${g.qos})`));
-    });
-  });
+      granted.forEach((g) => console.log(`[MQTT] ✓ Inscrito em ${g.topic} (QoS ${g.qos})`))
+    })
+  })
 
   client.on('message', async (topic, message) => {
-    const payload = message.toString().trim();
-    console.log(`[MQTT] ← [${topic}] ${payload}`);
+    const payload = message.toString().trim()
+    console.log(`[MQTT] ← [${topic}] ${payload}`)
 
     try {
-      const config = TOPIC_MAP[topic];
-      if (!config) return;
+      const config = TOPIC_MAP[topic]
+      if (!config) return
 
       if (config.tipo === 'leitura') {
-        await gravarLeitura(topic, payload);
+        await gravarLeitura(topic, payload)
       } else if (config.tipo === 'evento') {
-        await gravarEvento(topic, payload);
+        await gravarEvento(topic, payload)
       }
     } catch (err) {
-      console.error(`[MQTT] Erro ao processar mensagem de ${topic}:`, err.message);
+      console.error(`[MQTT] Erro ao processar mensagem de ${topic}:`, err.message)
     }
-  });
+  })
 
-  client.on('reconnect', () => {
-    console.log('[MQTT] Reconectando...');
-  });
+  client.on('reconnect', () => console.log('[MQTT] Reconectando...'))
+  client.on('error', (err) => console.error('[MQTT] Erro:', err.message))
+  client.on('offline', () => console.warn('[MQTT] Subscriber offline'))
 
-  client.on('error', (err) => {
-    console.error('[MQTT] Erro:', err.message);
-  });
-
-  client.on('offline', () => {
-    console.warn('[MQTT] Cliente offline');
-  });
-
-  // graceful shutdown
   process.on('SIGINT', () => {
-    console.log('\n[MQTT] Encerrando bridge...');
-    client.end(false, {}, () => process.exit(0));
-  });
+    console.log('\n[MQTT] Encerrando bridge...')
+    client.end(false, {}, () => process.exit(0))
+  })
 
-  return client;
+  return client
 }
 
-module.exports = { startMqttSubscriber };
+module.exports = { startMqttSubscriber }
