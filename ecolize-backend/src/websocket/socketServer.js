@@ -156,10 +156,27 @@ function emitControlState({ recurso, estado, userId }) {
   console.log(`[WS] → control:state ${recurso}=${estado}`)
 }
 
+function emitEstimatedCosts({ userId, custos }) {
+  if (!io) return
+
+  const event = {
+    custo_estimado: custos || null,
+    timestamp: new Date().toISOString(),
+  }
+
+  if (userId) {
+    io.to(`user:${userId}`).emit('custo_estimado:update', event)
+  }
+  io.to('global').emit('custo_estimado:update', event)
+
+  console.log(`[WS] → custo_estimado:update ${userId || 'global'}`)
+}
+
 module.exports = {
   initSocketServer,
   getIO,
   emitReading,
   emitDeviceStatus,
   emitControlState,
+  emitEstimatedCosts,
 }

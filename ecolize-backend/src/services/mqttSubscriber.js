@@ -19,7 +19,8 @@
 
 const createMqttClient = require('../config/mqttClient')
 const db = require('../config/db')
-const { emitReading, emitDeviceStatus } = require('../websocket/socketServer')
+const { emitReading, emitDeviceStatus, emitEstimatedCosts, emitControlState } = require('../websocket/socketServer')
+const { calculateEstimatedCosts } = require('./tarifaService')
 
 const TOPIC_MAP = {
   [process.env.MQTT_TOPIC_VAZAO || 'ESP32/agua']: {
@@ -159,13 +160,45 @@ async function gravarLeitura(topico, payload) {
     id_dispositivo: dispositivo.id,
     userId: dispositivo.idUsuario,
   })
+
+  // Calcular custos estimados mensais para o usuário e emitir por WebSocket
+  try {
+    const [aguaTotalRows] = await db.query(
+      `SELECT COALESCE(SUM(L.VALOR_CONSUMO), 0) AS TOTAL
+       FROM LEITURA L
+       JOIN DISPOSITIVOS D ON L.ID_DISPOSITIVO = D.ID
+       WHERE D.ID_USUARIO = ?
+         AND L.TIPO_RECURSO = 'AGUA'
+         AND MONTH(L.HORA_DATA_LEITURA) = MONTH(NOW())
+         AND YEAR(L.HORA_DATA_LEITURA) = YEAR(NOW())`,
+      [dispositivo.idUsuario]
+    )
+    const [energiaTotalRows] = await db.query(
+      `SELECT COALESCE(SUM(L.VALOR_CONSUMO), 0) AS TOTAL
+       FROM LEITURA L
+       JOIN DISPOSITIVOS D ON L.ID_DISPOSITIVO = D.ID
+       WHERE D.ID_USUARIO = ?
+         AND L.TIPO_RECURSO = 'ENERGIA'
+         AND MONTH(L.HORA_DATA_LEITURA) = MONTH(NOW())
+         AND YEAR(L.HORA_DATA_LEITURA) = YEAR(NOW())`,
+      [dispositivo.idUsuario]
+    )
+
+    const consumoEnergia = parseFloat((energiaTotalRows[0]?.TOTAL || 0).toFixed(2))
+    const consumoAgua = parseFloat((aguaTotalRows[0]?.TOTAL || 0).toFixed(3))
+
+    const custos = await calculateEstimatedCosts(dispositivo.idUsuario, consumoEnergia, consumoAgua)
+    emitEstimatedCosts({ userId: dispositivo.idUsuario, custos })
+  } catch (err) {
+    console.warn('[MQTT] Falha ao calcular custos estimados:', err.message)
+  }
 }
 
 async function gravarEvento(topico, payload) {
   const config = TOPIC_MAP[topico]
   if (!config || config.tipo !== 'evento') return
 
-  const eventosValidos = ['coletando', 'pausado', 'offline', 'online']
+  const eventosValidos = ['coletando', 'pausado', 'offline', 'online', 'ON', 'OFF']
   let statusPayload = payload
 
   try {
@@ -200,6 +233,11 @@ async function gravarEvento(topico, payload) {
     status: statusPayload,
     userId: dispositivo.idUsuario,
   })
+
+  // Se o payload for ON/OFF, também propague como estado do controle
+  if (statusPayload === 'ON' || statusPayload === 'OFF') {
+    emitControlState({ recurso: config.sensor === 'VAZAO_AGUA' ? 'AGUA' : 'ENERGIA', estado: statusPayload, userId: dispositivo.idUsuario })
+  }
 }
 
 function startMqttSubscriber() {
